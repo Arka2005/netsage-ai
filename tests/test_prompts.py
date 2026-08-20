@@ -1,5 +1,7 @@
+import re
+
 from netsage.ai.prompts import build_prompt, build_repair_message, load_prompt_file, render_case_block
-from netsage.cases import Case
+from netsage.cases import Case, load_cases
 from netsage.rules.base import Finding
 
 
@@ -58,7 +60,10 @@ def test_build_prompt_uses_real_prompt_files_and_embeds_case():
 
     assert "senior network engineer" in system
     assert "requires_human_review" in system
-    assert prompt_version == "v1.0"
+    # Asserted as well-formed, not as a literal value — the prompt iteration protocol
+    # (ai_diagnosis_specification.md §9) requires bumping this on every prompt change, so
+    # pinning it here would mean a failing test on every legitimate edit. [AR-06]
+    assert re.fullmatch(r"v\d+\.\d+", prompt_version), prompt_version
     # the three few-shot examples are present
     assert "EXAMPLE 1" in user
     assert "EXAMPLE 2" in user
@@ -67,6 +72,22 @@ def test_build_prompt_uses_real_prompt_files_and_embeds_case():
     # and the real case is appended at the end
     assert "case_id: NS-021" in user
     assert user.rindex("case_id: NS-021") > user.index("EXAMPLE 3")
+
+
+def test_few_shot_examples_use_no_real_evaluation_case():
+    """Guards against evaluation contamination: a few-shot example built from a live dataset
+    case would show that case its own answer at diagnosis time, inflating its score.
+    v1.0 of diagnose_prompt.md had exactly this problem with NS-006 and NS-021."""
+    cases = load_cases("data/cases.csv")
+    probe = cases[0]
+    _system, user, _version = build_prompt(probe, [], prompts_dir="prompts")
+    examples_block = user[: user.rindex("## CASE")]
+
+    used_real_ids = sorted(c.case_id for c in cases if c.case_id in examples_block)
+    assert used_real_ids == [], f"few-shot examples reference real evaluation cases: {used_real_ids}"
+
+    reproduced = [c.case_id for c in cases if c.show_outputs.strip()[:120] in examples_block]
+    assert reproduced == [], f"few-shot examples reproduce real case evidence: {reproduced}"
 
 
 def test_build_repair_message_substitutes_parser_error():
