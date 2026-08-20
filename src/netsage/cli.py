@@ -10,45 +10,9 @@ import sys
 from netsage import rules
 from netsage.ai.client import LLMResponse
 from netsage.ai.mock import MockClient
+from netsage.ai.prompts import build_prompt, build_repair_message, load_prompt_file
 from netsage.ai.schema import Diagnosis, parse_diagnosis
 from netsage.cases import CATEGORIES, REQUIRED_FIELDS, SEVERITIES, SchemaError, load_cases, validate_cases
-
-# Placeholder prompt content — Phase 6 replaces both of these with the real, versioned
-# prompts/system_prompt.md and prompts/diagnose_prompt.md (front-matter, few-shot examples).
-# The layout ("## CASE" / "case_id: ...") already matches docs/ai_diagnosis_specification.md
-# sec3.2 so ai/mock.py can find the case_id, and so Phase 6 is a drop-in replacement, not a rewrite
-# of the pipeline around it.
-_PROMPT_VERSION = "v0-dev"
-_SYSTEM_PROMPT_PLACEHOLDER = (
-    "You are a senior network engineer reviewing a junior's Packet Tracer lab. Output one JSON "
-    "object matching the diagnosis schema and nothing else — no prose, no markdown fences."
-)
-
-
-def _build_user_message(case, rule_findings: list) -> str:
-    lines = [
-        "## CASE",
-        f"case_id: {case.case_id}",
-        "",
-        "## SYMPTOM",
-        case.symptom,
-        "",
-        "## TOPOLOGY NOTE",
-        case.topology_note,
-        "",
-        "## SHOW OUTPUT (this is your only evidence)",
-        case.show_outputs,
-        "",
-        "## DETERMINISTIC RULE FINDINGS (advisory — verify against the evidence yourself)",
-    ]
-    if rule_findings:
-        for finding in rule_findings:
-            lines.append(f"- {finding.rule_id} [{finding.severity}]: {finding.message}")
-            lines.append(f'  evidence: "{finding.evidence}"')
-    else:
-        lines.append("(none)")
-    lines += ["", "## TASK", "Return the diagnosis JSON object."]
-    return "\n".join(lines)
 
 
 def _make_backend(name: str, model: str | None, fixtures_dir: str):
@@ -69,11 +33,10 @@ def _diagnosis_to_dict(diagnosis: Diagnosis | None) -> dict | None:
     return data
 
 
-def _diagnose_case(case, backend, rule_findings: list, temperature: float) -> dict:
+def _diagnose_case(case, backend, rule_findings: list, temperature: float, prompts_dir: str) -> dict:
     """Calls the backend, parses/validates the response, and does the one bounded repair retry
     on malformed JSON [AR-08]. Always returns a complete run-record dict, never raises."""
-    system = _SYSTEM_PROMPT_PLACEHOLDER
-    user = _build_user_message(case, rule_findings)
+    system, user, prompt_version = build_prompt(case, rule_findings, prompts_dir)
     rule_findings_dicts = [dataclasses.asdict(f) for f in rule_findings]
 
     try:
@@ -84,7 +47,7 @@ def _diagnose_case(case, backend, rule_findings: list, temperature: float) -> di
             "backend": getattr(backend, "backend", "unknown"),
             "model": getattr(backend, "model", "unknown"),
             "temperature": temperature,
-            "prompt_version": _PROMPT_VERSION,
+            "prompt_version": prompt_version,
             "rule_findings": rule_findings_dicts,
             "raw_response": "",
             "diagnosis": None,
@@ -100,10 +63,8 @@ def _diagnose_case(case, backend, rule_findings: list, temperature: float) -> di
 
     if result.status == "parse_failed":
         # One bounded repair retry, then give up — never a silent loop. [AR-08]
-        repair_user = (
-            f"{user}\n\n## REPAIR\nYour previous response was not valid JSON. Parser error: "
-            f"{result.errors[0] if result.errors else 'unknown error'}. "
-            "Return ONLY the corrected JSON object, nothing else."
+        repair_user = build_repair_message(
+            user, result.errors[0] if result.errors else "unknown error", prompts_dir
         )
         try:
             response = backend.complete(system, repair_user, temperature=temperature)
@@ -116,7 +77,7 @@ def _diagnose_case(case, backend, rule_findings: list, temperature: float) -> di
         "backend": response.backend,
         "model": response.model,
         "temperature": response.temperature,
-        "prompt_version": _PROMPT_VERSION,
+        "prompt_version": prompt_version,
         "rule_findings": rule_findings_dicts,
         "raw_response": result.raw_response,  # verbatim, before any cleanup
         "diagnosis": _diagnosis_to_dict(result.diagnosis),
@@ -257,7 +218,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"[ERROR] {exc}")
         return 4  # "backend unreachable" per functional_specification.md sec4's error table
 
-    run_id = args.run_id or _make_run_id(args.backend, args.model or "mock", _PROMPT_VERSION)
+    prompt_version = load_prompt_file(f"{args.prompts_dir}/diagnose_prompt.md").prompt_version
+    run_id = args.run_id or _make_run_id(args.backend, args.model or "mock", prompt_version)
     run_path = pathlib.Path(args.runs_dir) / f"{run_id}.jsonl"
     run_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -272,7 +234,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 rule_findings = []
                 rules_degraded = True
 
-            record = _diagnose_case(case, backend, rule_findings, args.temperature)
+            record = _diagnose_case(case, backend, rule_findings, args.temperature, args.prompts_dir)
             record["run_id"] = run_id
             record["timestamp_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
             record["rules_degraded"] = rules_degraded
@@ -322,6 +284,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--run-id", default=None)
     run_parser.add_argument("--runs-dir", default="artifacts/runs")
     run_parser.add_argument("--fixtures-dir", default="tests/fixtures/responses")
+    run_parser.add_argument("--prompts-dir", default="prompts")
     run_parser.set_defaults(func=_cmd_run)
 
     return parser

@@ -22,10 +22,12 @@ class MockClient:
         self.model = model
 
     def complete(self, system: str, user: str, *, temperature: float = 0.0) -> LLMResponse:
-        match = _CASE_ID_IN_PROMPT.search(user)
-        if not match:
+        # The prompt may contain several "case_id: ..." lines (one per few-shot example) — the
+        # real case being diagnosed is always the last one, appended after the examples.
+        matches = list(_CASE_ID_IN_PROMPT.finditer(user))
+        if not matches:
             raise ValueError("mock backend could not find a 'case_id: ...' line in the prompt")
-        case_id = match.group(1)
+        case_id = matches[-1].group(1)
 
         fixture_path = self.fixtures_dir / f"{case_id}.json"
         if not fixture_path.exists():
