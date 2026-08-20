@@ -54,3 +54,37 @@ def test_validate_prints_warning_for_thin_brief_family(capsys, tmp_path, write_c
 
     assert exit_code == 0
     assert "'DNS' has fewer than 3 cases" in out
+
+
+def test_check_case_prints_findings(capsys, tmp_path, write_cases_csv, make_case_row):
+    acl_output = (
+        "R1# show access-lists 110\nExtended IP access list 110\n"
+        " 10 deny ip 10.10.30.0 0.0.0.255 10.10.99.0 0.0.0.255 (0 matches)\n\n"
+        "R1# show ip interface Gi0/0.99 | include access list\n  Inbound  access list is 110\n"
+    )
+    path = write_cases_csv(tmp_path / "acl.csv", [make_case_row(case_id="NS-001", show_outputs=acl_output)])
+
+    exit_code = cli.main(["check", "--case", "NS-001", "--dataset", path])
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "R11_acl_zero_match" in out
+    assert "2 findings" in out
+
+
+def test_check_case_not_found_exits_1(capsys, tmp_cases_csv):
+    exit_code = cli.main(["check", "--case", "NS-999", "--dataset", tmp_cases_csv])
+    out = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "not found" in out
+
+
+def test_check_all_prints_hit_table(capsys, tmp_cases_csv):
+    exit_code = cli.main(["check", "--all", "--dataset", tmp_cases_csv])
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "Rule hit table" in out
+    assert "R11_acl_zero_match" in out
+    assert "2 cases checked · 0 rule engine error(s)" in out
