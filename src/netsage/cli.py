@@ -18,6 +18,7 @@ from netsage.ai.ollama import BackendUnreachable, OllamaClient
 from netsage.ai.prompts import build_prompt, build_repair_message, load_prompt_file
 from netsage.ai.schema import Diagnosis, parse_diagnosis
 from netsage.cases import CATEGORIES, REQUIRED_FIELDS, SEVERITIES, SchemaError, load_cases, validate_cases
+from netsage.scoring import aggregate, score_case
 
 
 def _make_backend(
@@ -102,6 +103,14 @@ def _diagnose_case(case, backend, rule_findings: list, temperature: float, promp
         except Exception:
             pass  # keep the original parse_failed result — the retry attempt itself errored
 
+    # Scored only when a validated diagnosis exists; non-ok cases carry scores: null and are
+    # counted as neither grounded nor abstained by scoring.aggregate(). [FR-05]
+    scores = (
+        dataclasses.asdict(score_case(result.diagnosis, case, result.flags))
+        if result.diagnosis is not None
+        else None
+    )
+
     return {
         "case_id": case.case_id,
         "backend": response.backend,
@@ -113,7 +122,7 @@ def _diagnose_case(case, backend, rule_findings: list, temperature: float, promp
         "diagnosis": _diagnosis_to_dict(result.diagnosis),
         "status": result.status,
         "flags": result.flags,
-        "scores": None,  # filled in by scoring.py, once ground truth comparison exists
+        "scores": scores,
         "latency_ms": response.latency_ms,
         "review": None,  # always null in this file — joined against artifacts/reviews.csv at read time
         "errors": result.errors,
@@ -226,6 +235,36 @@ def _cmd_check(args: argparse.Namespace) -> int:
     return 1
 
 
+def _print_run_summary(run_id: str, records: list[dict]) -> None:
+    """The documented run summary (functional_specification.md §2.3).
+
+    Note on denominators: ai_diagnosis_specification.md §6 defines root-cause and OSI accuracy
+    over (total - abstained), so those two lines show the answered count as the denominator.
+    Grounding, abstain and parse-failure lines are over the full total. The §2.3 sample output
+    prints "28/36 (77.8%)" for root cause, which is X/total rather than the §6 formula — the
+    formula is authoritative here, so the denominators are shown explicitly to avoid ambiguity.
+    """
+    metrics = aggregate(records)
+
+    def pct(value: float | None) -> str:
+        return "  n/a " if value is None else f"{value * 100:5.1f}%"
+
+    print(f"run {run_id}   {metrics.total} case(s)")
+    print(f"  root cause match   {metrics.root_cause_match}/{metrics.answered}  ({pct(metrics.root_cause_accuracy)})")
+    print(f"  osi layer match    {metrics.osi_match}/{metrics.answered}  ({pct(metrics.osi_accuracy)})")
+    print(f"  next command match {metrics.next_command_match}/{metrics.answered}")
+    print(f"  evidence grounded  {metrics.evidence_grounded}/{metrics.total}  ({pct(metrics.grounding_rate)})")
+    print(f"  abstained          {metrics.abstained}/{metrics.total}")
+    print(f"  parse failures     {metrics.parse_failed}/{metrics.total}")
+    if metrics.schema_invalid or metrics.backend_error:
+        print(f"  schema invalid     {metrics.schema_invalid}/{metrics.total}")
+        print(f"  backend errors     {metrics.backend_error}/{metrics.total}")
+    suffix = "      ← review these first" if metrics.confidently_wrong else ""
+    print(f"  confidently wrong  {metrics.confidently_wrong}{suffix}")
+    if metrics.confidently_wrong_cases:
+        print(f"      {', '.join(metrics.confidently_wrong_cases)}")
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     cases, exit_code = _load_cases_or_report(args.dataset)
     if cases is None:
@@ -254,6 +293,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     run_path.parent.mkdir(parents=True, exist_ok=True)
 
     ok_count = 0
+    records: list[dict] = []
     with open(run_path, "a", encoding="utf-8") as run_file:
         for case in selected:
             try:
@@ -277,12 +317,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
             record["rules_degraded"] = rules_degraded
             run_file.write(json.dumps(record) + "\n")
             run_file.flush()  # a long ollama run should leave a usable artifact if interrupted
+            records.append(record)
 
             status_mark = "✔" if record["status"] == "ok" else "✘"
             print(f"{case.case_id}  {case.title}")
             print(f"  status        : {record['status']} {status_mark}")
             if record["diagnosis"]:
-                print(f"  root cause tag: {record['diagnosis']['root_cause_tag']}")
+                expected = case.ground_truth()["expected_root_cause"]
+                scores = record["scores"] or {}
+                tag_mark = "✔" if scores.get("root_cause_match") else "✘"
+                osi_mark = "✔" if scores.get("osi_match") else "✘"
+                print(f"  root cause tag: {record['diagnosis']['root_cause_tag']:<32}[expected: {expected}] {tag_mark}")
+                print(f"  osi layer     : {record['diagnosis']['osi_layer']:<32}[expected: {case.osi_layer}] {osi_mark}")
                 print(f"  confidence    : {record['diagnosis']['confidence']} ({record['diagnosis']['confidence_band']})")
             if record["flags"]:
                 print(f"  flags         : {', '.join(record['flags'])}")
@@ -293,8 +339,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             if record["status"] == "ok":
                 ok_count += 1
 
-    print(f"run {run_id}   {len(selected)} case(s)")
-    print(f"  ok            {ok_count}/{len(selected)}")
+    _print_run_summary(run_id, records)
     print(f"all {len(selected)} case(s) are PENDING human review → run: netsage review --run {run_id}")
     return 0
 

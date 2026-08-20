@@ -124,6 +124,21 @@ silently inventing architecture or business logic.
   (`hallucinated_evidence` · `unknown_tag` · `rule_conflict` · `abstained` · `confidently_wrong`),
   and a substring check would be a brittle validator prone to false rejections. Treat it as
   system-prompt guidance for the model, not a validation rule to code against.
+- **Scoring a non-`ok` case: `scores` is `null`, and the case still counts in `total`.** The spec
+  doesn't say what `scores` holds when `status != "ok"` and no diagnosis exists. A failed case is
+  counted as neither grounded nor abstained, so a parse/schema failure drags accuracy down rather
+  than quietly disappearing from the denominator. Do not "fix" this by excluding failures — that
+  would make a model that emits garbage look identical to one that emits nothing.
+- **The run-summary denominators follow §6, not §2.3's sample output.**
+  `ai_diagnosis_specification.md` §6 defines `root_cause_accuracy = root_cause_match / (total −
+  abstained)`, but `functional_specification.md` §2.3's illustrative output prints
+  `28/36 (77.8%)`, which is `X/total`. The two disagree. §6 (the scoring contract) is treated as
+  authoritative, and the summary prints the answered count as the denominator so the number and
+  the fraction can't contradict each other. If the spec is ever reconciled, follow the spec.
+- **`concept_tag` correctness and automated `fix_steps` quality are deliberately not scored.**
+  Neither is in §6's sub-score table. `expected_fix_steps` is assigned to the *human* reviewer by
+  `functional_specification.md` §2.6 ("Reviewer checks `fix_steps` against `expected_fix_steps`");
+  automating it would need semantic comparison with no defensible deterministic definition.
 - **`netsage check`'s dataset-load-failure exit code is not defined by the spec, so it's set to 2
   rather than left to collide with an existing meaning.** `functional_specification.md` §2.2
   documents `check`'s exit codes as only 0/1/3, where 1 means "case not found" — but the CSV

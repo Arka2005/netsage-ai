@@ -134,12 +134,21 @@ def test_check_case_not_found_still_exits_1_after_remap(capsys, tmp_cases_csv):
 
 
 def _acl_case_row(make_case_row, case_id="NS-021"):
+    """An ACL row whose ground truth matches what the committed NS-021 fixture answers, so the
+    wiring test exercises a real scoring match rather than an incidental mismatch."""
     acl_output = (
         "R1# show access-lists 110\nExtended IP access list 110\n"
         " 10 deny ip 10.10.30.0 0.0.0.255 10.10.99.0 0.0.0.255 (0 matches)\n\n"
         "R1# show ip interface Gi0/0.99 | include access list\n  Inbound  access list is 110\n"
     )
-    return make_case_row(case_id=case_id, show_outputs=acl_output)
+    return make_case_row(
+        case_id=case_id,
+        show_outputs=acl_output,
+        category="ACL",
+        expected_root_cause="acl_wrong_direction",
+        osi_layer="L3/L4",
+        expected_next_command="show ip interface Gi0/0.99 | include access list",
+    )
 
 
 def test_run_case_with_mock_backend_writes_ok_record(capsys, tmp_path, write_cases_csv, make_case_row):
@@ -153,7 +162,7 @@ def test_run_case_with_mock_backend_writes_ok_record(capsys, tmp_path, write_cas
 
     assert exit_code == 0
     assert "PENDING HUMAN REVIEW" in out
-    assert "ok            1/1" in out
+    assert "root cause match   1/1" in out  # documented run summary [functional_specification.md §2.3]
 
     jsonl_files = list(runs_dir.glob("*.jsonl"))
     assert len(jsonl_files) == 1
@@ -163,7 +172,10 @@ def test_run_case_with_mock_backend_writes_ok_record(capsys, tmp_path, write_cas
     assert record["case_id"] == "NS-021"
     assert record["diagnosis"]["root_cause_tag"] == "acl_wrong_direction"
     assert record["review"] is None
-    assert record["scores"] is None
+    # scores are populated for ok records as of Phase 8 [FR-05]
+    assert record["scores"]["root_cause_match"] is True
+    assert record["scores"]["evidence_grounded"] is True
+    assert record["scores"]["abstained"] is False
     assert "raw_response" in record and record["raw_response"]  # stored verbatim
     assert len(record["rule_findings"]) == 2  # R11 fires twice on this evidence
 
@@ -180,7 +192,9 @@ def test_run_all_processes_every_case(capsys, tmp_path, write_cases_csv, make_ca
     out = capsys.readouterr().out
 
     assert exit_code == 0
-    assert "ok            2/2" in out
+    assert "root cause match" in out  # the documented run summary [functional_specification.md §2.3]
+    assert "evidence grounded" in out
+    assert "confidently wrong" in out
     lines = (runs_dir / next(runs_dir.glob("*.jsonl")).name).read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 2
 
