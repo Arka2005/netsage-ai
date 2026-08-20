@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Secrets
+.env
+.env.*
+
+# Generated artifacts (keep the directory, ignore the noise)
+artifacts/runs/*.jsonl
+artifacts/dashboard.html
+
+# Packet Tracer working files
+*.pkt.bak
+*.pka
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# One-time setup helper (delete after running)
+init-repo.bat
