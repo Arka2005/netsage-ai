@@ -18,6 +18,8 @@ from netsage.ai.ollama import BackendUnreachable, OllamaClient
 from netsage.ai.prompts import build_prompt, build_repair_message, load_prompt_file
 from netsage.ai.schema import Diagnosis, parse_diagnosis
 from netsage.cases import CATEGORIES, REQUIRED_FIELDS, SEVERITIES, SchemaError, load_cases, validate_cases
+from netsage.dashboard import metrics as dashboard_metrics
+from netsage.dashboard import render as dashboard_render
 from netsage.review.cli import load_run_records, review_run
 from netsage.review.store import agreement, load_reviews
 from netsage.scoring import aggregate, score_case
@@ -385,6 +387,43 @@ def _cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_dashboard(args: argparse.Namespace) -> int:
+    cases, exit_code = _load_cases_or_report(args.dataset)
+    if cases is None:
+        return 2 if exit_code == 1 else exit_code
+
+    try:
+        records = load_run_records(args.runs_dir, args.run)
+    except FileNotFoundError as exc:
+        print(f"[ERROR] {exc}")
+        return 1
+
+    reviews = load_reviews(args.reviews)
+    data = dashboard_metrics.build(args.run, cases, records, reviews)
+
+    out_dir = pathlib.Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    html_path = out_dir / "dashboard.html"
+    csv_path = out_dir / "dashboard.csv"
+    log_path = out_dir / "responsible_ai_log.md"
+
+    html_path.write_text(dashboard_render.render_html(data), encoding="utf-8")
+    csv_path.write_text(dashboard_render.render_csv(data), encoding="utf-8")
+    log_path.write_text(dashboard_render.render_responsible_ai_log(data, reviews, args.run), encoding="utf-8")
+
+    m, a = data.overall, data.agreement
+    print(f"run {args.run}   {m.total} case(s)")
+    accuracy = "n/a" if m.root_cause_accuracy is None else f"{m.root_cause_accuracy * 100:.1f}%"
+    agreement_pct = "n/a" if a.agreement is None else f"{a.agreement * 100:.1f}%"
+    print(f"  root cause accuracy {accuracy}   agreement {agreement_pct}   pending {a.pending}/{m.total}")
+    if data.confidently_wrong_cases:
+        print(f"  confidently wrong   {len(data.confidently_wrong_cases)}: {', '.join(data.confidently_wrong_cases)}")
+    print(f"✔ {html_path}")
+    print(f"✔ {csv_path}")
+    print(f"✔ {log_path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="netsage")
     subparsers = parser.add_subparsers(dest="command")
@@ -426,6 +465,14 @@ def build_parser() -> argparse.ArgumentParser:
     review_parser.add_argument("--runs-dir", default="artifacts/runs")
     review_parser.add_argument("--reviews", default="artifacts/reviews.csv")
     review_parser.set_defaults(func=_cmd_review)
+
+    dashboard_parser = subparsers.add_parser("dashboard", help="Generate the run report")
+    dashboard_parser.add_argument("--run", required=True)
+    dashboard_parser.add_argument("--dataset", default="data/cases.csv")
+    dashboard_parser.add_argument("--runs-dir", default="artifacts/runs")
+    dashboard_parser.add_argument("--reviews", default="artifacts/reviews.csv")
+    dashboard_parser.add_argument("--out-dir", default="artifacts")
+    dashboard_parser.set_defaults(func=_cmd_dashboard)
 
     return parser
 
