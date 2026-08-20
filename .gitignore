@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+# a venv created in the repo root rather than a subdirectory (python -m venv .)
+/Lib/
+/Scripts/
+/pyvenv.cfg
 .pytest_cache/
 *.egg-info/
 
