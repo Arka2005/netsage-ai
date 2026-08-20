@@ -95,7 +95,7 @@ def _normalize_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _validate_schema(data: dict) -> list[str]:
+def _validate_schema(data: dict, case: Case) -> list[str]:
     """Hard checks: required keys, types, enums, no extra keys, evidence/confidence consistency."""
     errors: list[str] = []
 
@@ -110,6 +110,11 @@ def _validate_schema(data: dict) -> list[str]:
 
     if not isinstance(data["case_id"], str) or not data["case_id"]:
         errors.append("case_id must be a non-empty string")
+    elif data["case_id"] != case.case_id:
+        # Documented as "echoes the input" — a mismatch means this response doesn't belong to
+        # the case it's being validated against at all (wrong backend response, batching bug,
+        # or a hallucinated case_id), not a minor field-quality issue to flag and keep.
+        errors.append(f"case_id {data['case_id']!r} does not match the case being diagnosed ({case.case_id!r})")
     if not isinstance(data["root_cause"], str) or not data["root_cause"].strip():
         errors.append("root_cause must be a non-empty string")
     if not isinstance(data["root_cause_tag"], str) or not data["root_cause_tag"]:
@@ -201,7 +206,7 @@ def parse_diagnosis(raw_text: str, case: Case, rule_findings: list[Finding] | No
             status="schema_invalid", diagnosis=None, flags=[], errors=["top-level JSON value is not an object"], raw_response=raw_text
         )
 
-    errors = _validate_schema(data)
+    errors = _validate_schema(data, case)
     if errors:
         return DiagnosisResult(status="schema_invalid", diagnosis=None, flags=[], errors=errors, raw_response=raw_text)
 

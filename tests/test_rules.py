@@ -77,6 +77,16 @@ def test_r03_gateway_mismatch_does_not_fire_when_gateway_is_bound():
     assert "R03_gateway_mismatch" not in _rule_ids(_case(text))
 
 
+def test_r03_gateway_mismatch_fires_even_when_gateway_is_a_substring_of_a_real_address():
+    # Regression: a plain "gw in block" substring check would treat 10.10.20.1 as "bound"
+    # merely because it's a text substring of the unrelated real address 10.10.20.100.
+    text = (
+        "PC5> ipconfig /all\nIPv4 Address: 10.10.20.55\nSubnet Mask: 255.255.255.0\nDefault Gateway: 10.10.20.1\n\n"
+        "R1# show ip interface brief | include Gi0/0\nGigabitEthernet0/0.20  10.10.20.100   YES manual up  up\n"
+    )
+    assert "R03_gateway_mismatch" in _rule_ids(_case(text))
+
+
 def test_r04_interface_down_fires_on_administratively_down():
     text = "R1# show interfaces Gi0/1\nGigabitEthernet0/1 is administratively down, line protocol is down\n"
     assert "R04_interface_down" in _rule_ids(_case(text))
@@ -113,6 +123,16 @@ def test_r06_trunk_vlan_pruned_does_not_fire_on_matching_lists():
     assert "R06_trunk_vlan_pruned" not in _rule_ids(_case(text))
 
 
+def test_r06_trunk_vlan_pruned_fires_info_when_both_sides_are_large_but_differ():
+    # Regression: two lists that both exceed the "unrestricted" heuristic threshold used to
+    # produce zero findings even though they genuinely differ.
+    text = (
+        "SW1# show interfaces trunk\nPort      Vlans allowed on trunk\nGi0/1     " + ",".join(str(v) for v in range(1, 151)) + "\n\n"
+        "SW2# show interfaces trunk\nPort      Vlans allowed on trunk\nGi0/1     " + ",".join(str(v) for v in range(1, 201)) + "\n"
+    )
+    assert "R06_trunk_vlan_pruned" in _rule_ids(_case(text))
+
+
 def test_r07_native_vlan_mismatch_fires_on_cdp_log():
     text = (
         "SW1# show logging | include NATIVE\n"
@@ -134,6 +154,16 @@ def test_r08_route_missing_fires_when_no_gateway_and_unreachable():
     text = (
         "R2# show ip route | begin Gateway\nGateway of last resort is not set\n\n"
         "PC1> tracert 172.16.50.10\n 1  10.10.10.1\n 2  *  *  *  Request timed out.\n"
+    )
+    assert "R08_route_missing" in _rule_ids(_case(text))
+
+
+def test_r08_route_missing_fires_on_router_style_reachability_failure():
+    # Real NS-020 case: the router's own "ping" output says "Success rate is 0 percent", never
+    # "Request timed out" (that phrasing is PC-only).
+    text = (
+        "R2# show ip route | begin Gateway\nGateway of last resort is not set\n\n"
+        "R1# ping 8.8.8.8\nSuccess rate is 0 percent (0/5)\n"
     )
     assert "R08_route_missing" in _rule_ids(_case(text))
 

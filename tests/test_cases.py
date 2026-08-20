@@ -131,6 +131,26 @@ def test_brief_mandated_family_under_three_cases_warns_not_errors(tmp_path, writ
     assert any("'DNS' has fewer than 3 cases" in w for w in report.warnings)
 
 
+def test_validate_reports_blank_instead_of_crashing_on_none_field(tmp_path, write_cases_csv, make_case_row):
+    # Regression: a truncated CSV row makes csv.DictReader fill missing trailing columns with
+    # None, which used to crash validate_cases with AttributeError on .strip().
+    row = make_case_row()
+    row["difficulty"] = None
+    path = write_cases_csv(tmp_path / "none_field.csv", [row])
+    report = validate_cases(load_cases(path))
+    assert not report.valid
+    assert any("'difficulty' is blank" in e for e in report.errors)
+
+
+def test_validate_accepts_prompt_line_with_no_space_after_caret(tmp_path, write_cases_csv, make_case_row):
+    # Regression: cases.py used to require whitespace after '>', while the rule engine's
+    # iter_device_blocks (which now shares the same pattern) has always made it optional.
+    show_outputs = "PC1>ping 10.10.10.1\n" + "Reply from 10.10.10.1: bytes=32 time=1ms TTL=128\n" + "x" * 40
+    path = write_cases_csv(tmp_path / "nospace.csv", [make_case_row(show_outputs=show_outputs)])
+    report = validate_cases(load_cases(path))
+    assert report.valid
+
+
 def test_switching_family_under_three_cases_does_not_warn(tmp_path, write_cases_csv, make_case_row):
     # Switching/Physical are not brief-mandated families (dataset spec §4) — 2 cases is expected.
     rows = [make_case_row(case_id="NS-001", category="Switching"), make_case_row(case_id="NS-002", category="Switching")]

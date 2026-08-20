@@ -14,6 +14,12 @@ def _load_cases_or_report(path: str) -> tuple[list, int]:
     except FileNotFoundError:
         print(f"[ERROR] cases.csv not found at {path}")
         return None, 2
+    except (OSError, UnicodeDecodeError) as exc:
+        # A directory path (PermissionError/IsADirectoryError, both OSError subclasses) or a
+        # non-UTF-8 CSV (UnicodeDecodeError, not an OSError) — both are "unreadable", exit 2's
+        # documented meaning (functional_specification.md sec2.1), not an uncaught traceback.
+        print(f"[ERROR] cases.csv is unreadable at {path}: {exc}")
+        return None, 2
     except SchemaError as exc:
         print(f"[ERROR] schema violation: {exc}")
         return None, 1
@@ -61,7 +67,14 @@ def _print_findings(case, findings: list) -> None:
 def _cmd_check(args: argparse.Namespace) -> int:
     cases, exit_code = _load_cases_or_report(args.dataset)
     if cases is None:
-        return exit_code
+        # netsage check's exit codes are documented as 0/1/3 (functional_specification.md
+        # sec2.2), where 1 specifically means "case not found" — but _load_cases_or_report
+        # returns 1 for a schema violation, which would collide with that meaning here. This
+        # isn't resolved by the spec (it never defines a dataset-load-failure code for check at
+        # all), so as the smallest defensible choice: fold any dataset-load failure (missing
+        # file, unreadable file, or bad schema) into exit 2 for check, keeping 1 reserved
+        # strictly for "case not found". See CLAUDE.md's "Known scoping decisions" section.
+        return 2 if exit_code == 1 else exit_code
 
     if args.case:
         case = next((c for c in cases if c.case_id == args.case), None)

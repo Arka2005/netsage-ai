@@ -9,7 +9,11 @@ not take down the others.
 import re
 from dataclasses import dataclass
 
-_PROMPT_LINE = re.compile(r"(?m)^(\S+)[#>]\s*(.*)$")
+from netsage.cases import PROMPT_LINE_PATTERN
+
+# Shared by any rule that needs to recognize a DHCP-failure address (currently R09 and R10) so
+# the two checks can't silently disagree on what counts as APIPA.
+APIPA_PATTERN = re.compile(r"\b169\.254\.\d{1,3}\.\d{1,3}\b")
 
 
 @dataclass
@@ -26,7 +30,7 @@ def iter_device_blocks(show_outputs: str) -> list[tuple[str, str]]:
     A device can appear more than once (multiple commands run against it) — callers that compare
     across devices should keep the first block per device, not the last.
     """
-    matches = list(_PROMPT_LINE.finditer(show_outputs))
+    matches = list(PROMPT_LINE_PATTERN.finditer(show_outputs))
     blocks = []
     for i, m in enumerate(matches):
         end = matches[i + 1].start() if i + 1 < len(matches) else len(show_outputs)

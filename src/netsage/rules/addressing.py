@@ -7,7 +7,7 @@ import ipaddress
 import re
 
 from netsage.cases import Case
-from netsage.rules.base import Finding, find_line, iter_device_blocks
+from netsage.rules.base import APIPA_PATTERN, Finding, find_line, iter_device_blocks
 
 # Packet Tracer's ipconfig-style output: "IPv4 Address: 10.10.20.55" / "IP Address: ...".
 _ADDRESS_LABEL = re.compile(r"(?im)IP(?:v4)?\s*Address:\s*(\d{1,3}(?:\.\d{1,3}){3})")
@@ -17,7 +17,6 @@ _INTERFACE_BRIEF_ROW = re.compile(
 )
 _MASK_LABEL = re.compile(r"(?im)Subnet Mask:\s*(\d{1,3}(?:\.\d{1,3}){3})")
 _GATEWAY_LABEL = re.compile(r"(?im)Default Gateway:\s*(\d{1,3}(?:\.\d{1,3}){3})")
-_APIPA = re.compile(r"\b169\.254\.\d{1,3}\.\d{1,3}\b")
 _INTERFACE_HINT = re.compile(r"(?i)(GigabitEthernet|FastEthernet|Serial|Vlan|Loopback|Port-channel)\S*")
 
 # "0.0.0.0" is Packet Tracer's sentinel for "no gateway configured" (e.g. after failed DHCP) —
@@ -91,9 +90,11 @@ def _check_gateway_mismatch(case: Case) -> list[Finding]:
         if gw == _UNSET_GATEWAY:
             continue
         # The gateway must be bound to a real router/SVI interface somewhere in the evidence — a
-        # bare text search would also match the gateway showing up in a diagnostic ping/tracert
-        # line, so require it to co-occur with an interface-name token within the same block.
-        bound_to_interface = any(gw in block and _INTERFACE_HINT.search(block) for _device, block in blocks)
+        # plain substring search would both match a diagnostic ping/tracert line AND treat one
+        # address as "present" merely because it's a textual substring of a different address
+        # (e.g. "10.10.20.1" inside "10.10.20.100"), so require a word-bounded exact match.
+        gw_pattern = re.compile(rf"\b{re.escape(gw)}\b")
+        bound_to_interface = any(gw_pattern.search(block) and _INTERFACE_HINT.search(block) for _device, block in blocks)
         if not bound_to_interface:
             findings.append(
                 Finding(
@@ -107,7 +108,7 @@ def _check_gateway_mismatch(case: Case) -> list[Finding]:
 
 
 def _check_apipa_address(case: Case) -> list[Finding]:
-    m = _APIPA.search(case.show_outputs)
+    m = APIPA_PATTERN.search(case.show_outputs)
     if not m:
         return []
     return [

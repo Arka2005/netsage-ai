@@ -91,43 +91,60 @@ def _check_trunk_vlan_pruned(case: Case) -> list[Finding]:
             evidence_line = m.group(0).splitlines()[-1].strip()
             per_device.setdefault(device, (_parse_vlan_list(m.group(1)), evidence_line))
 
-    devices = list(per_device)
-    findings = []
-    for i in range(len(devices)):
-        for j in range(i + 1, len(devices)):
-            d1, d2 = devices[i], devices[j]
-            vlans1, line1 = per_device[d1]
-            vlans2, line2 = per_device[d2]
-            restricted1 = len(vlans1) <= _UNRESTRICTED_VLAN_COUNT
-            restricted2 = len(vlans2) <= _UNRESTRICTED_VLAN_COUNT
+    # R06 is inherently about the two ends of one trunk — no real case has more than two.
+    if len(per_device) != 2:
+        return []
 
-            if restricted1 and restricted2:
-                for vlan in sorted(vlans1.symmetric_difference(vlans2)):
-                    side_with, evidence = (d1, line1) if vlan in vlans1 else (d2, line2)
-                    side_without = d2 if side_with == d1 else d1
-                    findings.append(
-                        Finding(
-                            rule_id="R06_trunk_vlan_pruned",
-                            severity="HIGH",
-                            message=f"VLAN {vlan} is allowed on {side_with}'s trunk but not {side_without}'s",
-                            evidence=evidence,
-                        )
-                    )
-            elif restricted1 != restricted2:
-                restricted_device, evidence = (d1, line1) if restricted1 else (d2, line2)
-                other_device = d2 if restricted1 else d1
-                findings.append(
-                    Finding(
-                        rule_id="R06_trunk_vlan_pruned",
-                        severity="INFO",
-                        message=(
-                            f"{restricted_device}'s trunk allows only a specific VLAN list while "
-                            f"{other_device} carries the default unrestricted range — verify nothing needed is pruned"
-                        ),
-                        evidence=evidence,
-                    )
+    (d1, (vlans1, line1)), (d2, (vlans2, line2)) = per_device.items()
+    restricted1 = len(vlans1) <= _UNRESTRICTED_VLAN_COUNT
+    restricted2 = len(vlans2) <= _UNRESTRICTED_VLAN_COUNT
+
+    if restricted1 and restricted2:
+        findings = []
+        for vlan in sorted(vlans1.symmetric_difference(vlans2)):
+            side_with, evidence = (d1, line1) if vlan in vlans1 else (d2, line2)
+            side_without = d2 if side_with == d1 else d1
+            findings.append(
+                Finding(
+                    rule_id="R06_trunk_vlan_pruned",
+                    severity="HIGH",
+                    message=f"VLAN {vlan} is allowed on {side_with}'s trunk but not {side_without}'s",
+                    evidence=evidence,
                 )
-    return findings
+            )
+        return findings
+
+    if restricted1 != restricted2:
+        restricted_device, evidence = (d1, line1) if restricted1 else (d2, line2)
+        other_device = d2 if restricted1 else d1
+        return [
+            Finding(
+                rule_id="R06_trunk_vlan_pruned",
+                severity="INFO",
+                message=(
+                    f"{restricted_device}'s trunk allows only a specific VLAN list while "
+                    f"{other_device} carries the default unrestricted range — verify nothing needed is pruned"
+                ),
+                evidence=evidence,
+            )
+        ]
+
+    # Both sides look "unrestricted" by the VLAN-count heuristic (e.g. two large, differently
+    # curated lists that both happen to exceed _UNRESTRICTED_VLAN_COUNT) — without this, a real
+    # mismatch here would be silently dropped instead of at least downgraded to advisory.
+    if vlans1 != vlans2:
+        return [
+            Finding(
+                rule_id="R06_trunk_vlan_pruned",
+                severity="INFO",
+                message=(
+                    f"{d1} and {d2} both show large, unrestricted-looking VLAN lists that differ — "
+                    "verify neither side is missing VLANs the other carries"
+                ),
+                evidence=line1,
+            )
+        ]
+    return []
 
 
 def _check_native_vlan_mismatch(case: Case) -> list[Finding]:

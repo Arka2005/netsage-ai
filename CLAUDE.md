@@ -124,6 +124,15 @@ silently inventing architecture or business logic.
   (`hallucinated_evidence` · `unknown_tag` · `rule_conflict` · `abstained` · `confidently_wrong`),
   and a substring check would be a brittle validator prone to false rejections. Treat it as
   system-prompt guidance for the model, not a validation rule to code against.
+- **`netsage check`'s dataset-load-failure exit code is not defined by the spec, so it's set to 2
+  rather than left to collide with an existing meaning.** `functional_specification.md` §2.2
+  documents `check`'s exit codes as only 0/1/3, where 1 means "case not found" — but the CSV
+  loader's own failures (missing file, unreadable file, bad schema) need *some* code. Reusing 1
+  would make "case not found" and "the whole dataset is broken" indistinguishable by exit code
+  alone, so `cli.py`'s `_cmd_check` remaps any dataset-load failure to exit 2 (borrowed from
+  `validate`'s "file missing/unreadable" meaning) and keeps 1 reserved strictly for case-not-found.
+  This isn't written down anywhere in `docs/` — if the spec is ever updated to define this
+  explicitly, follow the spec, not this note.
 
 ## Dataset
 

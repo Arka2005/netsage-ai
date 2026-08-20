@@ -118,6 +118,12 @@ def test_missing_required_field_is_schema_invalid():
     assert any("missing required field" in e for e in result.errors)
 
 
+def test_mismatched_case_id_is_schema_invalid():
+    result = parse_diagnosis(json.dumps(_valid_diagnosis_dict(case_id="NS-099")), _case())
+    assert result.status == "schema_invalid"
+    assert any("does not match the case being diagnosed" in e for e in result.errors)
+
+
 def test_invalid_osi_layer_is_schema_invalid():
     result = parse_diagnosis(json.dumps(_valid_diagnosis_dict(osi_layer="L99")), _case())
     assert result.status == "schema_invalid"

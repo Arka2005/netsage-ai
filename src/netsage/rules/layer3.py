@@ -9,7 +9,9 @@ from netsage.cases import Case
 from netsage.rules.base import Finding, find_line, iter_device_blocks
 
 _NO_GATEWAY_OF_LAST_RESORT = "Gateway of last resort is not set"
-_REACHABILITY_FAILURE = re.compile(r"(?i)Request timed out|Destination host unreachable")
+# PC-style ("Request timed out") and router-CLI-style ("Success rate is 0 percent") failures both
+# count — a router's own ping output never says "Request timed out", it prints a success rate.
+_REACHABILITY_FAILURE = re.compile(r"(?i)Request timed out|Destination host unreachable|Success rate is 0 percent")
 _OSPF_AREA = re.compile(r"(?im)\barea\s+(\d+)\b")
 
 
@@ -41,20 +43,18 @@ def _check_ospf_area_mismatch(case: Case) -> list[Finding]:
         if m:
             per_device.setdefault(device, (m.group(1), find_line(block, m.group(0))))
 
-    devices = list(per_device)
-    findings = []
-    for i in range(len(devices)):
-        for j in range(i + 1, len(devices)):
-            d1, d2 = devices[i], devices[j]
-            area1, line1 = per_device[d1]
-            area2, _line2 = per_device[d2]
-            if area1 != area2:
-                findings.append(
-                    Finding(
-                        rule_id="R14_ospf_area_mismatch",
-                        severity="HIGH",
-                        message=f"OSPF area mismatch: {d1} area {area1}, {d2} area {area2}",
-                        evidence=line1,
-                    )
-                )
-    return findings
+    # R14 is inherently about two OSPF-speaking routers on one link — no real case has more.
+    if len(per_device) != 2:
+        return []
+
+    (d1, (area1, line1)), (d2, (area2, _line2)) = per_device.items()
+    if area1 == area2:
+        return []
+    return [
+        Finding(
+            rule_id="R14_ospf_area_mismatch",
+            severity="HIGH",
+            message=f"OSPF area mismatch: {d1} area {area1}, {d2} area {area2}",
+            evidence=line1,
+        )
+    ]

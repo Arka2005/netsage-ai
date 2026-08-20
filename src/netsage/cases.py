@@ -81,7 +81,10 @@ ROOT_CAUSE_TAGS = {
 }
 
 # A device/host prompt line: "R1# show ip route", "SW1# show vlan brief", "PC1> ping ...".
-_PROMPT_LINE = re.compile(r"(?m)^\S+[#>]\s")
+# Shared with rules/base.py's iter_device_blocks (which needs the capture groups to split
+# blocks) — one definition, so validate_cases and the rule engine agree on what counts as a
+# prompt line instead of drifting apart.
+PROMPT_LINE_PATTERN = re.compile(r"(?m)^(\S+)[#>]\s*(.*)$")
 
 _MIN_SHOW_OUTPUTS_LENGTH = 80
 
@@ -171,9 +174,11 @@ def validate_cases(cases: list[Case]) -> ValidationReport:
         if not CASE_ID_PATTERN.fullmatch(case.case_id):
             errors.append(f"{case.case_id!r}: case_id does not match NS-\\d{{3}}")
 
-        # rule 2: no required field blank
+        # rule 2: no required field blank — a short CSV row makes csv.DictReader fill missing
+        # trailing columns with None, so treat that the same as an empty string rather than
+        # crashing on .strip()
         for field_name in REQUIRED_FIELDS:
-            if not getattr(case, field_name).strip():
+            if not (getattr(case, field_name) or "").strip():
                 errors.append(f"{case.case_id}: required field {field_name!r} is blank")
 
         # rule 3: enum fields within vocabulary
@@ -193,7 +198,7 @@ def validate_cases(cases: list[Case]) -> ValidationReport:
         # rule 5: show_outputs long enough and contains a device/host prompt line
         if len(case.show_outputs) < _MIN_SHOW_OUTPUTS_LENGTH:
             errors.append(f"{case.case_id}: show_outputs is shorter than {_MIN_SHOW_OUTPUTS_LENGTH} characters")
-        if not _PROMPT_LINE.search(case.show_outputs):
+        if not PROMPT_LINE_PATTERN.search(case.show_outputs):
             errors.append(f"{case.case_id}: show_outputs has no '<DEVICE># <command>' or '<HOST>> <command>' prompt line")
 
     for case_id, count in id_counts.items():

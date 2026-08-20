@@ -6,9 +6,8 @@ See docs/system_architecture.md §3 (C2).
 import re
 
 from netsage.cases import Case
-from netsage.rules.base import Finding, find_line, iter_device_blocks
+from netsage.rules.base import APIPA_PATTERN, Finding, find_line, iter_device_blocks
 
-_APIPA = re.compile(r"169\.254\.\d{1,3}\.\d{1,3}")
 _ACL_ZERO_MATCH_LINE = re.compile(r"(?im)^\s*\d+\s+(?:permit|deny)\s+\S+.*\(0 matches\)")
 _ACL_NUMBER = re.compile(r"(?i)access[- ]lists?\s+(\d+)")
 _ACL_APPLIED = re.compile(r"(?im)(Inbound|Outgoing)\s+access list is (\d+)")
@@ -28,7 +27,7 @@ def check(case: Case) -> list[Finding]:
 
 def _check_dhcp_relay_missing(case: Case) -> list[Finding]:
     text = case.show_outputs
-    if not _APIPA.search(text):
+    if not APIPA_PATTERN.search(text):
         return []
     # Router subinterface blocks that configure an address; some carry ip helper-address, some don't.
     subinterfaces = [b for _, b in iter_device_blocks(text) if re.search(r"(?i)ip address", b)]
