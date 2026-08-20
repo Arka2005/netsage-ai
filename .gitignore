@@ -26,3 +26,6 @@ Thumbs.db
 
 # One-time setup helper (delete after running)
 init-repo.bat
+
+# Spec docs — kept locally, not versioned
+docs/
