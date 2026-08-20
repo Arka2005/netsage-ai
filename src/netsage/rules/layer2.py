@@ -144,12 +144,18 @@ def _check_native_vlan_mismatch(case: Case) -> list[Finding]:
     ]
 
 
+_NONZERO_INPUT_ERRORS = re.compile(r"(?i)\b[1-9]\d*\s+input errors?\b")
+_NONZERO_CRC = re.compile(r"(?i)\b[1-9]\d*\s+CRC\b")
+_NONZERO_LATE_COLLISIONS = re.compile(r"(?i)\b[1-9]\d*\s+late collisions?\b")
+
+
 def _check_duplex_mismatch(case: Case) -> list[Finding]:
     text = case.show_outputs
-    crc = re.search(r"(?i)CRC", text)
-    input_errors = re.search(r"(?i)input errors?", text)
-    late_collisions = re.search(r"(?i)late collisions?", text)
-    if crc and input_errors and late_collisions:
+    # "show interfaces" always prints these counter labels, even at 0 — require an actual
+    # nonzero count so a healthy interface's "0 input errors, 0 CRC" doesn't false-positive.
+    has_errors = _NONZERO_INPUT_ERRORS.search(text) or _NONZERO_CRC.search(text)
+    late_collisions = _NONZERO_LATE_COLLISIONS.search(text)
+    if has_errors and late_collisions:
         return [
             Finding(
                 rule_id="R13_duplex_mismatch",

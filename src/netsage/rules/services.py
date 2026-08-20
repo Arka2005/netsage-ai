@@ -13,7 +13,9 @@ _ACL_ZERO_MATCH_LINE = re.compile(r"(?im)^\s*\d+\s+(?:permit|deny)\s+\S+.*\(0 ma
 _ACL_NUMBER = re.compile(r"(?i)access[- ]lists?\s+(\d+)")
 _ACL_APPLIED = re.compile(r"(?im)(Inbound|Outgoing)\s+access list is (\d+)")
 _NAT_OVERLOAD = re.compile(r"(?i)ip nat inside source.*overload")
-_EMPTY_INSIDE_INTERFACES = re.compile(r"(?im)^Inside interfaces:\s*$")
+# "Inside interfaces:" followed by a truly blank line — not just a header line with nothing
+# after the colon, since interface names are listed on the *next* line, not appended to it.
+_EMPTY_INSIDE_INTERFACES = re.compile(r"(?im)^Inside interfaces:\s*\n\s*\n")
 
 
 def check(case: Case) -> list[Finding]:
