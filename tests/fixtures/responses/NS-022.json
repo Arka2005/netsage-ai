@@ -1,0 +1,25 @@
+{
+  "case_id": "NS-022",
+  "root_cause": "ACL 101 has no permit for DNS return traffic, so replies from external resolvers are dropped.",
+  "root_cause_tag": "acl_blocks_dns",
+  "osi_layer": "L4",
+  "confidence": 0.79,
+  "confidence_band": "high",
+  "evidence": [
+    {
+      "quote": "10 permit tcp any host 203.0.113.2 eq 22 (0 matches)",
+      "source": "show_outputs",
+      "why": "The only explicit permit line never matches, suggesting the ACL isn't allowing the traffic it should."
+    },
+    {
+      "quote": "Inbound  access list is 101",
+      "source": "show_outputs",
+      "why": "ACL 101 is the one filtering this interface's inbound traffic."
+    }
+  ],
+  "next_command": ["show access-lists 101"],
+  "fix_steps": ["Add a permit udp entry for the DNS response port (eq 53)", "Re-apply the ACL"],
+  "verification_steps": ["Re-test DNS resolution from a host behind R1", "Confirm the new permit line increments"],
+  "risk_notes": "Adding an overly broad permit could reopen traffic the ACL was meant to block.",
+  "requires_human_review": true
+}

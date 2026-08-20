@@ -1,0 +1,25 @@
+{
+  "case_id": "NS-021",
+  "root_cause": "ACL 110 is applied inbound on the server subinterface, so it never sees guest-sourced traffic.",
+  "root_cause_tag": "acl_wrong_direction",
+  "osi_layer": "L3/L4",
+  "confidence": 0.82,
+  "confidence_band": "high",
+  "evidence": [
+    {
+      "quote": "10 deny ip 10.10.30.0 0.0.0.255 10.10.99.0 0.0.0.255 (0 matches)",
+      "source": "show_outputs",
+      "why": "The deny line never matches guest traffic, so the ACL is never actually filtering it."
+    },
+    {
+      "quote": "Inbound  access list is 110",
+      "source": "show_outputs",
+      "why": "The ACL is bound inbound on the wrong subinterface."
+    }
+  ],
+  "next_command": ["show ip interface Gi0/0.99 | include access list"],
+  "fix_steps": ["Remove the ACL from Gi0/0.99", "Apply it inbound on Gi0/0.30 instead"],
+  "verification_steps": ["Re-test from a guest host", "Confirm the deny line increments"],
+  "risk_notes": "Applying it outbound on the server side would also filter return traffic.",
+  "requires_human_review": true
+}
