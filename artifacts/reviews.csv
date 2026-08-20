@@ -1,0 +1,2 @@
+"run_id","case_id","verdict","reviewer","reviewed_at_utc","failure_mode","corrected_root_cause","corrected_fix","reason"
+"20260820T2013Z-ollama-gemma3-1b-v1.1","NS-021","Rejected","arka","2026-08-20T20:25:11Z","overconfident","","","AI identified an ACL-related issue but assigned the wrong root-cause tag. The evidence supports an ACL direction problem, so the diagnosis was rejected despite high confidence."
