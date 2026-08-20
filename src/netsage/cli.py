@@ -18,6 +18,8 @@ from netsage.ai.ollama import BackendUnreachable, OllamaClient
 from netsage.ai.prompts import build_prompt, build_repair_message, load_prompt_file
 from netsage.ai.schema import Diagnosis, parse_diagnosis
 from netsage.cases import CATEGORIES, REQUIRED_FIELDS, SEVERITIES, SchemaError, load_cases, validate_cases
+from netsage.review.cli import load_run_records, review_run
+from netsage.review.store import agreement, load_reviews
 from netsage.scoring import aggregate, score_case
 
 
@@ -344,6 +346,45 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_review(args: argparse.Namespace) -> int:
+    cases, exit_code = _load_cases_or_report(args.dataset)
+    if cases is None:
+        return 2 if exit_code == 1 else exit_code
+
+    try:
+        records = load_run_records(args.runs_dir, args.run)
+    except FileNotFoundError as exc:
+        print(f"[ERROR] {exc}")
+        return 1
+
+    reviewer = args.reviewer
+    if not reviewer:
+        try:
+            reviewer = input("reviewer name > ").strip()
+        except EOFError:
+            reviewer = ""
+    if not reviewer:
+        print("[ERROR] a reviewer name is required — every verdict is stamped with it [HR-04]")
+        return 1
+
+    cases_by_id = {case.case_id: case for case in cases}
+    summary = review_run(args.run, records, cases_by_id, args.reviews, reviewer)
+
+    reviews = load_reviews(args.reviews)
+    metrics = agreement(reviews, args.run, total_cases=len(records))
+
+    print()
+    print(f"review session: {summary['reviewed']} recorded · {summary['skipped']} left pending")
+    print(f"  accepted {metrics.accepted} · edited {metrics.edited} · rejected {metrics.rejected}")
+    if metrics.agreement is None:
+        print("  agreement  n/a (no verdicts recorded yet)")
+    else:
+        print(f"  agreement  {metrics.agreement * 100:.1f}%  ({metrics.accepted}/{metrics.reviewed})")
+    print(f"  pending    {metrics.pending}/{len(records)}   ← excluded from the agreement denominator")
+    print(f"verdicts appended to {args.reviews}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="netsage")
     subparsers = parser.add_subparsers(dest="command")
@@ -377,6 +418,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="per-case backend timeout in seconds (raise it for slow hardware or large models)",
     )
     run_parser.set_defaults(func=_cmd_run)
+
+    review_parser = subparsers.add_parser("review", help="The human review gate")
+    review_parser.add_argument("--run", required=True)
+    review_parser.add_argument("--reviewer", default=None)
+    review_parser.add_argument("--dataset", default="data/cases.csv")
+    review_parser.add_argument("--runs-dir", default="artifacts/runs")
+    review_parser.add_argument("--reviews", default="artifacts/reviews.csv")
+    review_parser.set_defaults(func=_cmd_review)
 
     return parser
 

@@ -124,6 +124,19 @@ silently inventing architecture or business logic.
   (`hallucinated_evidence` · `unknown_tag` · `rule_conflict` · `abstained` · `confidently_wrong`),
   and a substring check would be a brittle validator prone to false rejections. Treat it as
   system-prompt guidance for the model, not a validation rule to code against.
+- **`reviews.csv` is append-only, and the last verdict for a case wins.** C7 calls the store
+  append-only *and* the session resumable, so a case can legitimately be reviewed twice. The spec
+  doesn't say which verdict counts; the newest row is treated as current and earlier rows are kept
+  as history. Do not "fix" this by rewriting or deleting rows — the audit trail is the point.
+- **`failure_mode` is mandatory on `Rejected` and optional on `Edited`,** following
+  `functional_specification.md` §2.4 literally. Note the tension: §2.6/HR-06 say the Responsible
+  AI log is generated from *both* `Edited` and `Rejected` verdicts "with a failure-mode category",
+  so an `Edited` case destined for that log should carry one. Phase 10's log generator needs to
+  handle an `Edited` row with an empty `failure_mode` rather than assuming it is always present.
+- **A corrected root-cause tag is validated against the 36-tag vocabulary.** The spec doesn't say
+  whether reviewer corrections are constrained. They are, because an invented tag would silently
+  corrupt the dashboard's per-category analysis. Blank is allowed (a reviewer may correct only the
+  fix); a non-blank value must be a real tag.
 - **Scoring a non-`ok` case: `scores` is `null`, and the case still counts in `total`.** The spec
   doesn't say what `scores` holds when `status != "ok"` and no diagnosis exists. A failed case is
   counted as neither grounded nor abstained, so a parse/schema failure drags accuracy down rather
