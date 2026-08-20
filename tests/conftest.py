@@ -62,11 +62,34 @@ _ROWS = [
 
 
 @pytest.fixture
-def tmp_cases_csv(tmp_path: pathlib.Path) -> str:
+def make_case_row():
+    """Factory: a valid case row with one or more fields overridden, to test one violation at a time."""
+
+    def _make(**overrides) -> dict:
+        row = dict(_ROWS[0])
+        row.update(overrides)
+        return row
+
+    return _make
+
+
+@pytest.fixture
+def write_cases_csv():
+    """Factory: writes rows to path as an RFC 4180 CSV (LF endings, every field quoted); returns the path."""
+
+    def _write(path: pathlib.Path, rows: list[dict], header: list[str] | None = None) -> str:
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+            f, fieldnames=header or CASE_COLUMNS, quoting=csv.QUOTE_ALL, lineterminator="\n", extrasaction="ignore"
+        )
+            writer.writeheader()
+            writer.writerows(rows)
+        return str(path)
+
+    return _write
+
+
+@pytest.fixture
+def tmp_cases_csv(tmp_path: pathlib.Path, write_cases_csv) -> str:
     """Writes a minimal 2-row cases.csv (all 15 columns) and returns its path."""
-    path = tmp_path / "cases_mini.csv"
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=CASE_COLUMNS, quoting=csv.QUOTE_ALL, lineterminator="\n")
-        writer.writeheader()
-        writer.writerows(_ROWS)
-    return str(path)
+    return write_cases_csv(tmp_path / "cases_mini.csv", _ROWS)
