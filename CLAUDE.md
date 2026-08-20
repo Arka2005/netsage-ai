@@ -62,6 +62,23 @@ Planned package layout (`src/netsage/`, see [src/README.md](src/README.md)):
   self-contained `artifacts/dashboard.html` (no server) plus a CSV export.
 - `cli.py` — entry point: `netsage validate | check | run | review | dashboard`.
 
+## Implementation philosophy
+
+This is a capstone demo, not a production platform — optimize for a reliable 8-minute demo, not
+scale. When two valid approaches satisfy a requirement, take the simpler one.
+
+- Plain functions and dataclasses over class hierarchies or design patterns; no abstraction layer
+  until a second concrete caller actually needs it.
+- Stdlib first; no new dependency, framework, service, or architectural layer unless something in
+  `docs/` explicitly requires it. Before adding one, ask "does the demo actually need this?" — if
+  no, don't.
+- No databases, Docker/Kubernetes, message queues, auth, or extra APIs — nothing in the
+  requirements calls for any of them.
+- Don't build a later phase's code early, don't duplicate logic across files, and don't create a
+  new file purely for abstraction's sake.
+- Every phase should be runnable and testable on its own (e.g. `netsage validate` works today with
+  no other phase built yet).
+
 ## Non-negotiable design rules
 
 These are load-bearing for the project's grading criteria and safety story — do not casually
