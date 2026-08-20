@@ -5,25 +5,50 @@ import dataclasses
 import datetime
 import json
 import pathlib
+import re
 import sys
 
 from netsage import rules
 from netsage.ai.client import LLMResponse
 from netsage.ai.mock import MockClient
+from netsage.ai.ollama import DEFAULT_HOST as OLLAMA_DEFAULT_HOST
+from netsage.ai.ollama import DEFAULT_MODEL as OLLAMA_DEFAULT_MODEL
+from netsage.ai.ollama import DEFAULT_TIMEOUT_S as OLLAMA_DEFAULT_TIMEOUT_S
+from netsage.ai.ollama import BackendUnreachable, OllamaClient
 from netsage.ai.prompts import build_prompt, build_repair_message, load_prompt_file
 from netsage.ai.schema import Diagnosis, parse_diagnosis
 from netsage.cases import CATEGORIES, REQUIRED_FIELDS, SEVERITIES, SchemaError, load_cases, validate_cases
 
 
-def _make_backend(name: str, model: str | None, fixtures_dir: str):
+def _make_backend(
+    name: str,
+    model: str | None,
+    fixtures_dir: str,
+    ollama_host: str = OLLAMA_DEFAULT_HOST,
+    timeout_s: int = OLLAMA_DEFAULT_TIMEOUT_S,
+):
     if name == "mock":
         return MockClient(fixtures_dir=fixtures_dir, model=model or "mock")
-    raise NotImplementedError(f"--backend {name!r} isn't implemented yet — use --backend mock")
+    if name == "ollama":
+        return OllamaClient(model=model or OLLAMA_DEFAULT_MODEL, host=ollama_host, timeout_s=timeout_s)
+    raise NotImplementedError(f"--backend {name!r} isn't implemented yet — use --backend mock or --backend ollama")
+
+
+_UNSAFE_RUN_ID_CHARS = re.compile(r'[:\\/*?"<>|\s]+')
 
 
 def _make_run_id(backend: str, model: str, prompt_version: str) -> str:
+    """run_id doubles as a filename, so the model name has to be filesystem-safe.
+
+    Ollama model names always contain a colon ("gemma3:4b", "llama3.1:8b"). On Windows a colon
+    in a path opens an NTFS alternate data stream instead of erroring, so the JSONL silently
+    lands in a hidden stream and the visible artifact is 0 bytes — the audit trail is lost with
+    no warning [FR-07]. Sanitising to a hyphen also matches the documented example run_id in
+    system_architecture.md §5 ("...-ollama-llama3.1-8b-v1.2").
+    """
     timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%MZ")
-    return f"{timestamp}-{backend}-{model}-{prompt_version}"
+    safe_model = _UNSAFE_RUN_ID_CHARS.sub("-", model)
+    return f"{timestamp}-{backend}-{safe_model}-{prompt_version}"
 
 
 def _diagnosis_to_dict(diagnosis: Diagnosis | None) -> dict | None:
@@ -41,6 +66,11 @@ def _diagnose_case(case, backend, rule_findings: list, temperature: float, promp
 
     try:
         response: LLMResponse = backend.complete(system, user, temperature=temperature)
+    except BackendUnreachable:
+        # The daemon itself is down/unreachable — that's a whole-run failure, not a per-case
+        # one. Let it propagate so _cmd_run can abort with the documented exit 4 instead of
+        # grinding out 36 identical backend_error records. [functional_specification.md §4]
+        raise
     except Exception as exc:
         return {
             "case_id": case.case_id,
@@ -213,7 +243,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        backend = _make_backend(args.backend, args.model, args.fixtures_dir)
+        backend = _make_backend(args.backend, args.model, args.fixtures_dir, args.ollama_host, args.timeout)
     except NotImplementedError as exc:
         print(f"[ERROR] {exc}")
         return 4  # "backend unreachable" per functional_specification.md sec4's error table
@@ -234,11 +264,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 rule_findings = []
                 rules_degraded = True
 
-            record = _diagnose_case(case, backend, rule_findings, args.temperature, args.prompts_dir)
+            try:
+                record = _diagnose_case(case, backend, rule_findings, args.temperature, args.prompts_dir)
+            except BackendUnreachable as exc:
+                print(f"[ERROR] {exc}")
+                print(f"[ERROR] aborting run after {ok_count} completed case(s) — no further cases attempted.")
+                print("        Use --backend mock to run offline against recorded fixtures.")
+                return 4
+
             record["run_id"] = run_id
             record["timestamp_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
             record["rules_degraded"] = rules_degraded
             run_file.write(json.dumps(record) + "\n")
+            run_file.flush()  # a long ollama run should leave a usable artifact if interrupted
 
             status_mark = "✔" if record["status"] == "ok" else "✘"
             print(f"{case.case_id}  {case.title}")
@@ -248,6 +286,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 print(f"  confidence    : {record['diagnosis']['confidence']} ({record['diagnosis']['confidence_band']})")
             if record["flags"]:
                 print(f"  flags         : {', '.join(record['flags'])}")
+            print(f"  latency       : {record['latency_ms']} ms")
             print("  verdict       : PENDING HUMAN REVIEW")
             print()
 
@@ -285,6 +324,13 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--runs-dir", default="artifacts/runs")
     run_parser.add_argument("--fixtures-dir", default="tests/fixtures/responses")
     run_parser.add_argument("--prompts-dir", default="prompts")
+    run_parser.add_argument("--ollama-host", default=OLLAMA_DEFAULT_HOST)
+    run_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=OLLAMA_DEFAULT_TIMEOUT_S,
+        help="per-case backend timeout in seconds (raise it for slow hardware or large models)",
+    )
     run_parser.set_defaults(func=_cmd_run)
 
     return parser

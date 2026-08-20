@@ -244,9 +244,68 @@ def test_run_retries_once_on_malformed_json_then_gives_up(capsys, tmp_path, writ
 
 def test_run_unimplemented_backend_exits_4(capsys, tmp_cases_csv, tmp_path):
     exit_code = cli.main(
-        ["run", "--backend", "ollama", "--case", "NS-001", "--dataset", tmp_cases_csv, "--runs-dir", str(tmp_path)]
+        ["run", "--backend", "api", "--case", "NS-001", "--dataset", tmp_cases_csv, "--runs-dir", str(tmp_path)]
     )
     out = capsys.readouterr().out
 
     assert exit_code == 4
     assert "isn't implemented" in out
+
+
+def test_run_id_sanitises_colons_in_model_names():
+    """Regression: Ollama model names always contain a colon ("gemma3:4b"). On Windows a colon
+    in a path silently opens an NTFS alternate data stream, so the run JSONL vanished into a
+    hidden stream and the visible artifact was 0 bytes — losing the audit trail [FR-07]."""
+    run_id = cli._make_run_id("ollama", "gemma3:4b", "v1.1")
+    assert ":" not in run_id
+    assert run_id.endswith("-ollama-gemma3-4b-v1.1")
+
+
+def test_run_writes_a_readable_artifact_for_a_colon_model_name(tmp_path, write_cases_csv, make_case_row):
+    dataset_path = write_cases_csv(tmp_path / "cases.csv", [_acl_case_row(make_case_row)])
+    runs_dir = tmp_path / "runs"
+
+    exit_code = cli.main(
+        [
+            "run",
+            "--backend",
+            "mock",
+            "--model",
+            "gemma3:4b",  # colon, as every real ollama model has
+            "--case",
+            "NS-021",
+            "--dataset",
+            dataset_path,
+            "--runs-dir",
+            str(runs_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    written = list(runs_dir.glob("*.jsonl"))
+    assert len(written) == 1, f"expected one readable .jsonl, found {[p.name for p in runs_dir.iterdir()]}"
+    assert written[0].stat().st_size > 0, "artifact is empty — the record went somewhere else"
+    assert json.loads(written[0].read_text(encoding="utf-8").strip())["case_id"] == "NS-021"
+
+
+def test_run_aborts_with_exit_4_when_ollama_unreachable(capsys, tmp_cases_csv, tmp_path):
+    # Point at a port nothing is listening on — no real daemon involved either way.
+    exit_code = cli.main(
+        [
+            "run",
+            "--backend",
+            "ollama",
+            "--all",
+            "--dataset",
+            tmp_cases_csv,
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--ollama-host",
+            "http://localhost:1",
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert exit_code == 4
+    assert "could not reach Ollama" in out
+    assert "--backend mock" in out  # points the user at the offline fallback
