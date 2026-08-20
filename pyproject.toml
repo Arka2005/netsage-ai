@@ -1,0 +1,22 @@
+[project]
+name = "netsage-ai"
+version = "0.1.0"
+description = "AI-assisted troubleshooter for Cisco-style Packet Tracer lab networks, with a mandatory human review gate."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+netsage = "netsage.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
