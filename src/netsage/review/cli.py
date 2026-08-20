@@ -30,8 +30,18 @@ def load_run_records(runs_dir: str, run_id: str) -> list[dict]:
     path = pathlib.Path(runs_dir) / f"{run_id}.jsonl"
     if not path.exists():
         raise FileNotFoundError(f"no run artifact at {path}")
+    records = []
     with open(path, encoding="utf-8") as f:
-        return [json.loads(line) for line in f if line.strip()]
+        for number, line in enumerate(f, start=1):
+            if not line.strip():
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                # A run killed mid-write leaves a truncated final line. Report it clearly and
+                # keep the complete records before it, rather than dying on a usable artifact.
+                raise ValueError(f"{path} line {number} is not valid JSON ({exc}) — run artifact is corrupt") from exc
+    return records
 
 
 def render_case(record: dict, case: Case) -> str:
@@ -108,16 +118,26 @@ def render_case(record: dict, case: Case) -> str:
     return "\n".join(lines)
 
 
+class ReviewAborted(Exception):
+    """The reviewer sent EOF (Ctrl-D). Treated as Quit, at any prompt.
+
+    Previously EOF was mapped to the literal string "q", which only made sense at the top-level
+    verdict prompt. At a sub-prompt that sentinel was either re-prompted forever (failure mode,
+    corrected tag) or silently stored as data (a Rejected verdict with reason "q"). Raising
+    instead makes "reviewer walked away" distinguishable from "reviewer typed q" everywhere.
+    """
+
+
 def _ask(input_fn, output_fn, prompt: str) -> str:
     output_fn(prompt)
     try:
         return input_fn()
-    except EOFError:
-        return "q"
+    except EOFError as exc:
+        raise ReviewAborted from exc
 
 
-def _ask_required(input_fn, output_fn, prompt: str, error: str) -> str | None:
-    """Re-prompts until non-empty. Returns None if the reviewer aborts with EOF."""
+def _ask_required(input_fn, output_fn, prompt: str, error: str) -> str:
+    """Re-prompts until non-empty. Raises ReviewAborted if the reviewer sends EOF."""
     while True:
         value = _ask(input_fn, output_fn, prompt).strip()
         if value:
@@ -125,7 +145,7 @@ def _ask_required(input_fn, output_fn, prompt: str, error: str) -> str | None:
         output_fn(f"  ! {error}")
 
 
-def _ask_failure_mode(input_fn, output_fn) -> str | None:
+def _ask_failure_mode(input_fn, output_fn) -> str:
     output_fn("  failure mode:")
     for i, mode in enumerate(FAILURE_MODES, start=1):
         output_fn(f"    {i}. {mode}")
@@ -154,14 +174,20 @@ def review_run(
     cases_by_id: dict[str, Case],
     reviews_path: str,
     reviewer: str,
-    input_fn: Callable[[], str] = input,
-    output_fn: Callable[[str], None] = print,
+    input_fn: Callable[[], str] | None = None,
+    output_fn: Callable[[str], None] | None = None,
 ) -> dict:
     """Walks pending cases and records verdicts. Returns a summary dict.
 
     Resumable: cases that already carry a verdict for this run are skipped, so re-running
     picks up at the first Pending case.
+
+    input_fn/output_fn default to the builtins but are resolved at call time, not bound as
+    default argument values — binding them at import would make them unmonkeypatchable.
     """
+    input_fn = input_fn or input
+    output_fn = output_fn or print
+
     already_reviewed = latest_verdicts(load_reviews(reviews_path), run_id)
     pending = [r for r in records if r["case_id"] not in already_reviewed]
 
@@ -183,43 +209,56 @@ def review_run(
         output_fn("")
         output_fn(render_case(record, case))
         output_fn("")
-        choice = _ask(input_fn, output_fn, "[A]ccept   [E]dit   [R]eject   [S]kip   [Q]uit\n> ").strip().lower()
 
-        if choice in ("q", "quit"):
-            summary["quit"] = True
-            output_fn("Quitting — cases without a verdict remain Pending.")
-            break
-        if choice in ("s", "skip", ""):
-            summary["skipped"] += 1
-            output_fn(f"{record['case_id']} left Pending.")
-            continue
+        try:
+            choice = _ask(input_fn, output_fn, "[A]ccept   [E]dit   [R]eject   [S]kip   [Q]uit\n> ").strip().lower()
 
-        verdict = {"a": ACCEPTED, "e": EDITED, "r": REJECTED}.get(choice[:1])
-        if verdict is None:
-            summary["skipped"] += 1
-            output_fn(f"  ! unrecognised choice {choice!r} — {record['case_id']} left Pending.")
-            continue
-
-        review = Review(
-            run_id=run_id,
-            case_id=record["case_id"],
-            verdict=verdict,
-            reviewer=reviewer,
-            reviewed_at_utc=utc_now(),
-        )
-
-        if verdict == EDITED:
-            review.corrected_root_cause = _ask_corrected_tag(input_fn, output_fn)
-            review.corrected_fix = _ask(input_fn, output_fn, "  corrected fix (blank to skip) > ").strip()
-            if not (review.corrected_root_cause or review.corrected_fix):
-                output_fn("  ! an Edit needs at least one correction — leaving Pending.")
+            if choice in ("q", "quit"):
+                summary["quit"] = True
+                output_fn("Quitting — cases without a verdict remain Pending.")
+                break
+            if choice in ("s", "skip", ""):
                 summary["skipped"] += 1
+                output_fn(f"{record['case_id']} left Pending.")
                 continue
-            review.reason = _ask_required(input_fn, output_fn, "  reason (required) > ", "a reason is required [HR-03]")
-        elif verdict == REJECTED:
-            review.failure_mode = _ask_failure_mode(input_fn, output_fn)
-            review.corrected_root_cause = _ask_corrected_tag(input_fn, output_fn)
-            review.reason = _ask_required(input_fn, output_fn, "  reason (required) > ", "a reason is required [HR-03]")
+
+            verdict = {"a": ACCEPTED, "e": EDITED, "r": REJECTED}.get(choice[:1])
+            if verdict is None:
+                summary["skipped"] += 1
+                output_fn(f"  ! unrecognised choice {choice!r} — {record['case_id']} left Pending.")
+                continue
+
+            review = Review(
+                run_id=run_id,
+                case_id=record["case_id"],
+                verdict=verdict,
+                reviewer=reviewer,
+                reviewed_at_utc=utc_now(),
+            )
+
+            if verdict == EDITED:
+                review.corrected_root_cause = _ask_corrected_tag(input_fn, output_fn)
+                review.corrected_fix = _ask(input_fn, output_fn, "  corrected fix (blank to skip) > ").strip()
+                if not (review.corrected_root_cause or review.corrected_fix):
+                    output_fn("  ! an Edit needs at least one correction — leaving Pending.")
+                    summary["skipped"] += 1
+                    continue
+                review.reason = _ask_required(
+                    input_fn, output_fn, "  reason (required) > ", "a reason is required [HR-03]"
+                )
+            elif verdict == REJECTED:
+                review.failure_mode = _ask_failure_mode(input_fn, output_fn)
+                review.corrected_root_cause = _ask_corrected_tag(input_fn, output_fn)
+                review.reason = _ask_required(
+                    input_fn, output_fn, "  reason (required) > ", "a reason is required [HR-03]"
+                )
+        except ReviewAborted:
+            # EOF at any prompt ends the session. Nothing partial is written, so the case stays
+            # Pending rather than being recorded with placeholder answers [HR-01].
+            summary["quit"] = True
+            output_fn("")
+            output_fn(f"Aborted — {record['case_id']} and any cases after it remain Pending.")
+            break
 
         try:
             append_review(reviews_path, review)

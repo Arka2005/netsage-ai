@@ -400,3 +400,51 @@ def test_a_case_missing_from_the_dataset_is_skipped_not_crashed(tmp_path):
     summary = _run(["a"], records=[_record("NS-999")], reviews_path=path, cases={})
     assert summary["skipped"] == 1
     assert load_reviews(path) == []
+
+
+# --- regressions from the Phase 5-10 code review ----------------------------
+
+
+def test_eof_at_failure_mode_prompt_aborts_instead_of_looping(tmp_path):
+    """Regression: EOF was mapped to the literal "q", which is neither a digit nor a valid
+    failure mode, so the prompt re-asked forever (reproduced at >2000 iterations)."""
+    path = str(tmp_path / "reviews.csv")
+    summary = _run(["r"], reviews_path=path)  # queue empties at the failure-mode prompt
+
+    assert summary["quit"] is True
+    assert summary["reviewed"] == 0
+    assert load_reviews(path) == []  # nothing partial written — the case stays Pending
+
+
+def test_eof_at_corrected_tag_prompt_aborts_instead_of_looping(tmp_path):
+    path = str(tmp_path / "reviews.csv")
+    summary = _run(["e"], reviews_path=path)
+
+    assert summary["quit"] is True
+    assert load_reviews(path) == []
+
+
+def test_eof_at_reason_prompt_does_not_record_a_placeholder_reason(tmp_path):
+    """Regression: EOF returned "q", which passed the non-empty check and was stored as the
+    mandatory reason — a meaningless audit record that fed straight into the AI log."""
+    path = str(tmp_path / "reviews.csv")
+    summary = _run(["r", "overconfident", ""], reviews_path=path)  # EOF at the reason prompt
+
+    assert summary["quit"] is True
+    assert load_reviews(path) == []
+
+
+def test_typed_q_still_quits_normally(tmp_path):
+    # The sentinel change must not break the documented [Q]uit key.
+    path = str(tmp_path / "reviews.csv")
+    summary = _run(["q"], reviews_path=path)
+    assert summary["quit"] is True
+    assert load_reviews(path) == []
+
+
+def test_corrupt_run_artifact_raises_a_clear_error(tmp_path):
+    from netsage.review.cli import load_run_records
+
+    (tmp_path / "X.jsonl").write_text('{"case_id": "NS-001"}\n{truncated', encoding="utf-8")
+    with pytest.raises(ValueError, match="line 2 is not valid JSON"):
+        load_run_records(str(tmp_path), "X")

@@ -23,6 +23,8 @@ class BackendUnreachable(Exception):
 
 
 class OllamaClient:
+    backend = "ollama"  # read by the run recorder when complete() fails [AR-06]
+
     def __init__(
         self,
         model: str = DEFAULT_MODEL,

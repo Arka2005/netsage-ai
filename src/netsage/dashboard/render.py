@@ -113,7 +113,7 @@ every diagnosis requires a human verdict before it is final</p>
 <span class="muted">({m.root_cause_match}/{m.answered} answered; {m.abstained} abstained excluded)</span></p>
 <table>
 <tr><td>OSI layer match</td><td class="num">{m.osi_match}/{m.answered}</td><td class="num">{_pct(m.osi_accuracy)}</td></tr>
-<tr><td>Next-command match</td><td class="num">{m.next_command_match}/{m.answered}</td><td class="num"></td></tr>
+<tr><td>Next-command match</td><td class="num">{m.next_command_match}/{m.scored}</td><td class="num"></td></tr>
 <tr><td>Parse failures</td><td class="num">{m.parse_failed}/{m.total}</td><td class="num"></td></tr>
 <tr><td>Schema invalid</td><td class="num">{m.schema_invalid}/{m.total}</td><td class="num"></td></tr>
 <tr><td>Backend errors</td><td class="num">{m.backend_error}/{m.total}</td><td class="num"></td></tr>

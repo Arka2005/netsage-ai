@@ -17,6 +17,8 @@ _CASE_ID_IN_PROMPT = re.compile(r"case_id:\s*(\S+)")
 
 
 class MockClient:
+    backend = "mock"  # read by the run recorder when complete() fails [AR-06]
+
     def __init__(self, fixtures_dir: str = "tests/fixtures/responses", model: str = "mock"):
         self.fixtures_dir = Path(fixtures_dir)
         self.model = model

@@ -323,3 +323,102 @@ def test_run_aborts_with_exit_4_when_ollama_unreachable(capsys, tmp_cases_csv, t
     assert exit_code == 4
     assert "could not reach Ollama" in out
     assert "--backend mock" in out  # points the user at the offline fallback
+
+
+# --- review / dashboard CLI wiring (coverage gap from the Phase 5-10 review) --
+
+
+def _seed_run(tmp_path, write_cases_csv, make_case_row, run_id="RUN-1"):
+    dataset_path = write_cases_csv(tmp_path / "cases.csv", [_acl_case_row(make_case_row)])
+    runs_dir = tmp_path / "runs"
+    cli.main(
+        ["run", "--backend", "mock", "--case", "NS-021", "--dataset", dataset_path,
+         "--runs-dir", str(runs_dir), "--run-id", run_id]
+    )
+    return dataset_path, runs_dir
+
+
+def test_review_cli_records_a_verdict_end_to_end(capsys, tmp_path, write_cases_csv, make_case_row, monkeypatch):
+    dataset_path, runs_dir = _seed_run(tmp_path, write_cases_csv, make_case_row)
+    reviews = tmp_path / "reviews.csv"
+    monkeypatch.setattr("builtins.input", lambda *a: "a")
+
+    exit_code = cli.main(
+        ["review", "--run", "RUN-1", "--dataset", dataset_path, "--runs-dir", str(runs_dir),
+         "--reviews", str(reviews), "--reviewer", "alice"]
+    )
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "agreement" in out
+    assert "Accepted" in reviews.read_text(encoding="utf-8")
+
+
+def test_review_cli_exits_1_on_missing_run(capsys, tmp_cases_csv, tmp_path):
+    exit_code = cli.main(
+        ["review", "--run", "NOPE", "--dataset", tmp_cases_csv, "--runs-dir", str(tmp_path), "--reviewer", "a"]
+    )
+    assert exit_code == 1
+    assert "no run artifact" in capsys.readouterr().out
+
+
+def test_review_cli_exits_1_without_a_reviewer(capsys, tmp_path, write_cases_csv, make_case_row, monkeypatch):
+    dataset_path, runs_dir = _seed_run(tmp_path, write_cases_csv, make_case_row)
+    monkeypatch.setattr("builtins.input", lambda *a: "")  # reviewer prompt answered blank
+
+    exit_code = cli.main(
+        ["review", "--run", "RUN-1", "--dataset", dataset_path, "--runs-dir", str(runs_dir)]
+    )
+    assert exit_code == 1
+    assert "reviewer name is required" in capsys.readouterr().out
+
+
+def test_review_cli_exits_1_on_a_corrupt_run_artifact(capsys, tmp_cases_csv, tmp_path):
+    (tmp_path / "BAD.jsonl").write_text("{truncated", encoding="utf-8")
+    exit_code = cli.main(
+        ["review", "--run", "BAD", "--dataset", tmp_cases_csv, "--runs-dir", str(tmp_path), "--reviewer", "a"]
+    )
+    assert exit_code == 1
+    assert "not valid JSON" in capsys.readouterr().out
+
+
+def test_dashboard_cli_writes_all_three_artifacts(capsys, tmp_path, write_cases_csv, make_case_row):
+    dataset_path, runs_dir = _seed_run(tmp_path, write_cases_csv, make_case_row)
+    out_dir = tmp_path / "artifacts"
+
+    exit_code = cli.main(
+        ["dashboard", "--run", "RUN-1", "--dataset", dataset_path, "--runs-dir", str(runs_dir),
+         "--reviews", str(tmp_path / "none.csv"), "--out-dir", str(out_dir)]
+    )
+
+    assert exit_code == 0
+    assert (out_dir / "dashboard.html").exists()
+    assert (out_dir / "dashboard.csv").exists()
+    assert (out_dir / "responsible_ai_log.md").exists()
+    assert "root cause accuracy" in capsys.readouterr().out
+
+
+def test_dashboard_cli_exits_1_on_missing_run(capsys, tmp_cases_csv, tmp_path):
+    exit_code = cli.main(
+        ["dashboard", "--run", "NOPE", "--dataset", tmp_cases_csv, "--runs-dir", str(tmp_path),
+         "--out-dir", str(tmp_path)]
+    )
+    assert exit_code == 1
+
+
+def test_backend_error_record_names_the_backend(tmp_path, write_cases_csv, make_case_row):
+    """Regression: the record read a non-existent .backend attribute and always stored
+    "unknown", losing the backend for exactly the records worth investigating [AR-06]."""
+    dataset_path = write_cases_csv(tmp_path / "cases.csv", [make_case_row(case_id="NS-001")])
+    runs_dir = tmp_path / "runs"
+    empty_fixtures = tmp_path / "fx"
+    empty_fixtures.mkdir()
+
+    cli.main(
+        ["run", "--backend", "mock", "--case", "NS-001", "--dataset", dataset_path,
+         "--runs-dir", str(runs_dir), "--fixtures-dir", str(empty_fixtures)]
+    )
+    record = json.loads((runs_dir / next(runs_dir.glob("*.jsonl")).name).read_text(encoding="utf-8").strip())
+
+    assert record["status"] == "backend_error"
+    assert record["backend"] == "mock"

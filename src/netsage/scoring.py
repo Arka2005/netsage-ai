@@ -32,7 +32,8 @@ class CaseScores:
 @dataclass
 class RunMetrics:
     total: int
-    answered: int  # total - abstained, the accuracy denominator
+    answered: int  # total - abstained, the accuracy denominator for root cause and OSI
+    scored: int  # records that produced a validated diagnosis; the next-command denominator
     root_cause_match: int
     osi_match: int
     next_command_match: int
@@ -115,10 +116,15 @@ def aggregate(records: list[dict]) -> RunMetrics:
 
     abstained = counts["abstained"]
     answered = total - abstained
+    # next_command_match is counted for abstained cases too (the abstain path legitimately
+    # proposes disambiguating commands), so it cannot share the accuracy denominator —
+    # a lone abstaining case that matched would otherwise print "1/0".
+    scored = sum(1 for r in records if r.get("scores"))
 
     return RunMetrics(
         total=total,
         answered=answered,
+        scored=scored,
         root_cause_match=counts["root_cause_match"],
         osi_match=counts["osi_match"],
         next_command_match=counts["next_command_match"],

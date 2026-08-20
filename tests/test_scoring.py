@@ -214,3 +214,21 @@ def test_aggregate_of_an_empty_run_is_safe():
     assert metrics.total == 0
     assert metrics.root_cause_accuracy is None
     assert metrics.grounding_rate == 0.0
+
+
+def test_next_command_has_its_own_denominator_not_the_accuracy_one():
+    """Regression: next_command_match counts abstained cases (the abstain path legitimately
+    proposes disambiguating commands), so sharing `answered` could print "1/0"."""
+    records = [_record("NS-001", abstained=True, next_command_match=True)]
+    metrics = aggregate(records)
+
+    assert metrics.answered == 0  # the accuracy denominator
+    assert metrics.scored == 1  # the next-command denominator
+    assert metrics.next_command_match == 1
+
+
+def test_scored_excludes_failed_cases():
+    records = [_record("NS-001"), _record("NS-002", status="parse_failed")]
+    metrics = aggregate(records)
+    assert metrics.total == 2
+    assert metrics.scored == 1

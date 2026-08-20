@@ -104,6 +104,11 @@ def _diagnose_case(case, backend, rule_findings: list, temperature: float, promp
         try:
             response = backend.complete(system, repair_user, temperature=temperature)
             result = parse_diagnosis(response.text, case, rule_findings)
+        except BackendUnreachable:
+            # The daemon died between the first call and the retry. Propagate for the same
+            # reason the first call does — this is a whole-run failure, not a parse failure,
+            # and recording it as parse_failed would misattribute a backend outage.
+            raise
         except Exception:
             pass  # keep the original parse_failed result — the retry attempt itself errored
 
@@ -256,7 +261,7 @@ def _print_run_summary(run_id: str, records: list[dict]) -> None:
     print(f"run {run_id}   {metrics.total} case(s)")
     print(f"  root cause match   {metrics.root_cause_match}/{metrics.answered}  ({pct(metrics.root_cause_accuracy)})")
     print(f"  osi layer match    {metrics.osi_match}/{metrics.answered}  ({pct(metrics.osi_accuracy)})")
-    print(f"  next command match {metrics.next_command_match}/{metrics.answered}")
+    print(f"  next command match {metrics.next_command_match}/{metrics.scored}")
     print(f"  evidence grounded  {metrics.evidence_grounded}/{metrics.total}  ({pct(metrics.grounding_rate)})")
     print(f"  abstained          {metrics.abstained}/{metrics.total}")
     print(f"  parse failures     {metrics.parse_failed}/{metrics.total}")
@@ -355,7 +360,7 @@ def _cmd_review(args: argparse.Namespace) -> int:
 
     try:
         records = load_run_records(args.runs_dir, args.run)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, ValueError) as exc:
         print(f"[ERROR] {exc}")
         return 1
 
@@ -394,7 +399,7 @@ def _cmd_dashboard(args: argparse.Namespace) -> int:
 
     try:
         records = load_run_records(args.runs_dir, args.run)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, ValueError) as exc:
         print(f"[ERROR] {exc}")
         return 1
 
