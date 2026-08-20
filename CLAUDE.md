@@ -102,6 +102,29 @@ These are load-bearing for the project's grading criteria and safety story — d
 - **No secrets in the repo.** API keys come from environment variables (`NETSAGE_API_KEY`) only;
   `.env` is git-ignored.
 
+## Known scoping decisions / open items
+
+Places where the docs in `docs/` are genuinely underdetermined and a deliberate, smallest-
+defensible choice was made instead of inventing a fuller specification. Don't "fix" these by
+expanding scope without raising it first — when the spec is incomplete, flag the gap rather than
+silently inventing architecture or business logic.
+
+- **`confidently_wrong` is not computed in `ai/schema.py`.** It requires comparing against ground
+  truth (`root_cause_match == false`), which `parse_diagnosis()` deliberately never sees. It
+  belongs in `scoring.py`, where ground truth is actually available — do not add a ground-truth
+  parameter to the schema validator to compute it early.
+- **`rule_conflict` is narrower than "the tag contradicts a HIGH rule finding."** The docs never
+  define a rule-id → root-cause-tag mapping, and inventing one wasn't a smaller decision than
+  leaving the gap. The implemented check is the one direction that's actually checkable without
+  that mapping: flag `rule_conflict` when the model abstains (`insufficient_evidence`) while a
+  HIGH-severity rule finding exists. Do not invent a rule-id → tag mapping to broaden this later
+  without it being an explicit, separate decision.
+- **The Field rules table's "no 'I have fixed' phrasing" / imperative-mood constraint on
+  `fix_steps` is intentionally unenforced.** It's not in the documented Flags vocabulary
+  (`hallucinated_evidence` · `unknown_tag` · `rule_conflict` · `abstained` · `confidently_wrong`),
+  and a substring check would be a brittle validator prone to false rejections. Treat it as
+  system-prompt guidance for the model, not a validation rule to code against.
+
 ## Dataset
 
 `data/cases.csv` — 36 rows, 15 columns (RFC 4180, every field quoted, LF line endings, UTF-8), 10
